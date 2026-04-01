@@ -3,11 +3,23 @@
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
+type TodoCategory = 'work' | 'personal'
+
+type Subtask = {
+  id: string
+  text: string
+  done: boolean
+}
+
 type Todo = {
   id: string
   text: string
   done: boolean
   date: string
+  category: TodoCategory
+  memo: string
+  subtasks: Subtask[]
+  expanded: boolean
 }
 
 type PaletteColor = {
@@ -24,9 +36,16 @@ type Routine = {
 
 type RoutineChecks = Record<string, string[]>
 
+type QuickNote = {
+  id: string
+  text: string
+  createdAt: string
+}
+
 const STORAGE_TODOS = 'mood-routine-todos'
 const STORAGE_ROUTINES = 'mood-routine-routines'
 const STORAGE_ROUTINE_CHECKS = 'mood-routine-routine-checks'
+const STORAGE_QUICK_NOTES = 'mood-routine-quick-notes'
 
 const defaultColors: PaletteColor[] = [
   { id: 'blue', name: '파랑', value: '#60a5fa' },
@@ -86,14 +105,37 @@ function getCalendarDays(baseDate: Date) {
   return days
 }
 
-function DockNav({ current }: { current: 'check' | 'note' }) {
+function normalizeTodo(raw: any): Todo {
+  return {
+    id: raw?.id ?? makeId(),
+    text: raw?.text ?? '',
+    done: Boolean(raw?.done),
+    date: raw?.date ?? formatDateKey(new Date()),
+    category: raw?.category === 'personal' ? 'personal' : 'work',
+    memo: typeof raw?.memo === 'string' ? raw.memo : '',
+    expanded: Boolean(raw?.expanded),
+    subtasks: Array.isArray(raw?.subtasks)
+      ? raw.subtasks.map((sub: any) => ({
+          id: sub?.id ?? makeId(),
+          text: sub?.text ?? '',
+          done: Boolean(sub?.done),
+        }))
+      : [],
+  }
+}
+
+function DockNav({
+  current,
+}: {
+  current: 'check' | 'ideas' | 'note'
+}) {
   const base =
     'flex h-14 w-14 items-center justify-center rounded-2xl text-2xl transition'
   const active = 'bg-zinc-900 text-white shadow-md'
   const inactive = 'border border-zinc-200 bg-white text-zinc-500'
 
   return (
-    <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2">
+    <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
       <div className="flex items-center gap-3 rounded-3xl border border-zinc-200 bg-zinc-50/95 px-3 py-3 shadow-lg backdrop-blur">
         <Link
           href="/"
@@ -101,6 +143,14 @@ function DockNav({ current }: { current: 'check' | 'note' }) {
           aria-label="오늘 페이지"
         >
           ☑️
+        </Link>
+
+        <Link
+          href="/ideas"
+          className={`${base} ${current === 'ideas' ? active : inactive}`}
+          aria-label="아이디어 페이지"
+        >
+          💡
         </Link>
 
         <Link
@@ -122,13 +172,14 @@ export default function HomePage() {
   const [mounted, setMounted] = useState(false)
 
   const [todoInput, setTodoInput] = useState('')
+  const [todoCategory, setTodoCategory] = useState<TodoCategory>('work')
   const [todos, setTodos] = useState<Todo[]>([])
+  const [activeTab, setActiveTab] = useState<TodoCategory>('work')
 
   const colors = defaultColors
 
   const [routineInput, setRoutineInput] = useState('')
   const [selectedColorId, setSelectedColorId] = useState('green')
-
   const [routines, setRoutines] = useState<Routine[]>(defaultRoutines)
   const [routineChecks, setRoutineChecks] = useState<RoutineChecks>({})
 
@@ -138,16 +189,31 @@ export default function HomePage() {
 
   const [selectedDateKey, setSelectedDateKey] = useState(todayKey)
 
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null)
+  const [editingTodoText, setEditingTodoText] = useState('')
+  const [editingTodoCategory, setEditingTodoCategory] =
+    useState<TodoCategory>('work')
+
+  const [subtaskInputs, setSubtaskInputs] = useState<Record<string, string>>({})
+  const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null)
+  const [editingSubtaskText, setEditingSubtaskText] = useState('')
+
+  const [quickNotes, setQuickNotes] = useState<QuickNote[]>([])
+  const [quickNoteOpen, setQuickNoteOpen] = useState(false)
+  const [quickNoteText, setQuickNoteText] = useState('')
+
   useEffect(() => {
     setMounted(true)
 
     const savedTodos = localStorage.getItem(STORAGE_TODOS)
     const savedRoutines = localStorage.getItem(STORAGE_ROUTINES)
     const savedChecks = localStorage.getItem(STORAGE_ROUTINE_CHECKS)
+    const savedQuickNotes = localStorage.getItem(STORAGE_QUICK_NOTES)
 
     if (savedTodos) {
       try {
-        setTodos(JSON.parse(savedTodos))
+        const parsed = JSON.parse(savedTodos)
+        setTodos(Array.isArray(parsed) ? parsed.map(normalizeTodo) : [])
       } catch {}
     }
 
@@ -160,6 +226,13 @@ export default function HomePage() {
     if (savedChecks) {
       try {
         setRoutineChecks(JSON.parse(savedChecks))
+      } catch {}
+    }
+
+    if (savedQuickNotes) {
+      try {
+        const parsed = JSON.parse(savedQuickNotes)
+        setQuickNotes(Array.isArray(parsed) ? parsed : [])
       } catch {}
     }
   }, [])
@@ -179,12 +252,19 @@ export default function HomePage() {
     localStorage.setItem(STORAGE_ROUTINE_CHECKS, JSON.stringify(routineChecks))
   }, [routineChecks, mounted])
 
-  const sortedTodos = useMemo(() => {
-    const todayTodos = todos.filter((t) => t.date === todayKey)
-    const undone = todayTodos.filter((t) => !t.done)
-    const done = todayTodos.filter((t) => t.done)
+  useEffect(() => {
+    if (!mounted) return
+    localStorage.setItem(STORAGE_QUICK_NOTES, JSON.stringify(quickNotes))
+  }, [quickNotes, mounted])
+
+  const todayTodosByTab = useMemo(() => {
+    const filtered = todos.filter(
+      (t) => t.date === todayKey && t.category === activeTab
+    )
+    const undone = filtered.filter((t) => !t.done)
+    const done = filtered.filter((t) => t.done)
     return [...undone, ...done]
-  }, [todos, todayKey])
+  }, [todos, todayKey, activeTab])
 
   const calendarDays = useMemo(() => getCalendarDays(today), [today])
   const monthLabel = `${today.getFullYear()}년 ${today.getMonth() + 1}월`
@@ -197,11 +277,13 @@ export default function HomePage() {
   }, [routines, routineChecks, selectedDateKey])
 
   const selectedDateTodos = useMemo(() => {
-    const filtered = todos.filter((todo) => todo.date === selectedDateKey)
+    const filtered = todos.filter(
+      (todo) => todo.date === selectedDateKey && todo.category === activeTab
+    )
     const undone = filtered.filter((todo) => !todo.done)
     const done = filtered.filter((todo) => todo.done)
     return [...undone, ...done]
-  }, [todos, selectedDateKey])
+  }, [todos, selectedDateKey, activeTab])
 
   function getColorById(colorId: string) {
     return colors.find((c) => c.id === colorId)
@@ -220,6 +302,10 @@ export default function HomePage() {
       text,
       done: false,
       date: todayKey,
+      category: todoCategory,
+      memo: '',
+      subtasks: [],
+      expanded: false,
     }
 
     setTodos((prev) => [newTodo, ...prev])
@@ -236,6 +322,124 @@ export default function HomePage() {
 
   function deleteTodo(id: string) {
     setTodos((prev) => prev.filter((todo) => todo.id !== id))
+  }
+
+  function startEditTodo(todo: Todo) {
+    setEditingTodoId(todo.id)
+    setEditingTodoText(todo.text)
+    setEditingTodoCategory(todo.category)
+  }
+
+  function saveTodoEdit() {
+    const text = editingTodoText.trim()
+    if (!editingTodoId || !text) return
+
+    setTodos((prev) =>
+      prev.map((todo) =>
+        todo.id === editingTodoId
+          ? { ...todo, text, category: editingTodoCategory }
+          : todo
+      )
+    )
+
+    cancelTodoEdit()
+  }
+
+  function cancelTodoEdit() {
+    setEditingTodoId(null)
+    setEditingTodoText('')
+    setEditingTodoCategory('work')
+  }
+
+  function toggleTodoExpanded(id: string) {
+    setTodos((prev) =>
+      prev.map((todo) =>
+        todo.id === id ? { ...todo, expanded: !todo.expanded } : todo
+      )
+    )
+  }
+
+  function updateTodoMemo(id: string, memo: string) {
+    setTodos((prev) =>
+      prev.map((todo) => (todo.id === id ? { ...todo, memo } : todo))
+    )
+  }
+
+  function addSubtask(todoId: string) {
+    const text = (subtaskInputs[todoId] ?? '').trim()
+    if (!text) return
+
+    setTodos((prev) =>
+      prev.map((todo) =>
+        todo.id === todoId
+          ? {
+              ...todo,
+              expanded: true,
+              subtasks: [...todo.subtasks, { id: makeId(), text, done: false }],
+            }
+          : todo
+      )
+    )
+
+    setSubtaskInputs((prev) => ({ ...prev, [todoId]: '' }))
+  }
+
+  function toggleSubtask(todoId: string, subtaskId: string) {
+    setTodos((prev) =>
+      prev.map((todo) =>
+        todo.id === todoId
+          ? {
+              ...todo,
+              subtasks: todo.subtasks.map((sub) =>
+                sub.id === subtaskId ? { ...sub, done: !sub.done } : sub
+              ),
+            }
+          : todo
+      )
+    )
+  }
+
+  function deleteSubtask(todoId: string, subtaskId: string) {
+    setTodos((prev) =>
+      prev.map((todo) =>
+        todo.id === todoId
+          ? {
+              ...todo,
+              subtasks: todo.subtasks.filter((sub) => sub.id !== subtaskId),
+            }
+          : todo
+      )
+    )
+  }
+
+  function startEditSubtask(subtask: Subtask) {
+    setEditingSubtaskId(subtask.id)
+    setEditingSubtaskText(subtask.text)
+  }
+
+  function saveSubtaskEdit(todoId: string, subtaskId: string) {
+    const text = editingSubtaskText.trim()
+    if (!text) return
+
+    setTodos((prev) =>
+      prev.map((todo) =>
+        todo.id === todoId
+          ? {
+              ...todo,
+              subtasks: todo.subtasks.map((sub) =>
+                sub.id === subtaskId ? { ...sub, text } : sub
+              ),
+            }
+          : todo
+      )
+    )
+
+    cancelSubtaskEdit()
+  }
+
+  function cancelSubtaskEdit() {
+    setEditingSubtaskId(null)
+    setEditingSubtaskText('')
   }
 
   function addRoutine() {
@@ -316,6 +520,21 @@ export default function HomePage() {
     setEditingRoutineColorId('green')
   }
 
+  function saveQuickNote() {
+    const text = quickNoteText.trim()
+    if (!text) return
+
+    const newNote: QuickNote = {
+      id: makeId(),
+      text,
+      createdAt: new Date().toISOString(),
+    }
+
+    setQuickNotes((prev) => [newNote, ...prev])
+    setQuickNoteText('')
+    setQuickNoteOpen(false)
+  }
+
   return (
     <main className="min-h-screen bg-zinc-50 pb-28 text-zinc-900">
       <div className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 py-6">
@@ -327,11 +546,37 @@ export default function HomePage() {
         </header>
 
         <section className="rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold">오늘 할 일</h2>
+          <div className="mb-4 flex gap-2 rounded-2xl bg-zinc-100 p-1">
+            <button
+              onClick={() => setActiveTab('work')}
+              className={`flex-1 rounded-2xl px-4 py-2.5 text-sm font-medium ${
+                activeTab === 'work'
+                  ? 'bg-zinc-900 text-white'
+                  : 'text-zinc-600'
+              }`}
+            >
+              WORK
+            </button>
+            <button
+              onClick={() => setActiveTab('personal')}
+              className={`flex-1 rounded-2xl px-4 py-2.5 text-sm font-medium ${
+                activeTab === 'personal'
+                  ? 'bg-zinc-900 text-white'
+                  : 'text-zinc-600'
+              }`}
+            >
+              PERSONAL
+            </button>
           </div>
 
-          <div className="mb-4 flex gap-2">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold">오늘 할 일</h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              현재 탭: {activeTab === 'work' ? 'WORK' : 'PERSONAL'}
+            </p>
+          </div>
+
+          <div className="mb-2 flex gap-2">
             <input
               value={todoInput}
               onChange={(e) => setTodoInput(e.target.value)}
@@ -350,45 +595,294 @@ export default function HomePage() {
             </button>
           </div>
 
-          <div className="flex flex-col gap-2">
-            {sortedTodos.length === 0 ? (
+          <div className="mb-4 flex gap-2">
+            <button
+              onClick={() => setTodoCategory('work')}
+              className={`rounded-full px-3 py-1.5 text-xs ${
+                todoCategory === 'work'
+                  ? 'bg-zinc-900 text-white'
+                  : 'bg-zinc-100 text-zinc-600'
+              }`}
+            >
+              WORK로 추가
+            </button>
+            <button
+              onClick={() => setTodoCategory('personal')}
+              className={`rounded-full px-3 py-1.5 text-xs ${
+                todoCategory === 'personal'
+                  ? 'bg-zinc-900 text-white'
+                  : 'bg-zinc-100 text-zinc-600'
+              }`}
+            >
+              PERSONAL로 추가
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {todayTodosByTab.length === 0 ? (
               <div className="rounded-2xl bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-400">
-                아직 오늘 할 일이 없어
+                아직 할 일이 없어
               </div>
             ) : (
-              sortedTodos.map((todo) => (
-                <div
-                  key={todo.id}
-                  className="flex items-center gap-3 rounded-2xl border border-zinc-100 px-3 py-3"
-                >
-                  <button
-                    onClick={() => toggleTodo(todo.id)}
-                    className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs ${
-                      todo.done
-                        ? 'border-zinc-900 bg-zinc-900 text-white'
-                        : 'border-zinc-300 bg-white text-transparent'
-                    }`}
-                    aria-label="할 일 체크"
-                  >
-                    ✓
-                  </button>
+              todayTodosByTab.map((todo) => {
+                const doneCount = todo.subtasks.filter((s) => s.done).length
+                const totalCount = todo.subtasks.length
 
+                return (
                   <div
-                    className={`flex-1 text-sm ${
-                      todo.done ? 'text-zinc-400 line-through' : 'text-zinc-800'
-                    }`}
+                    key={todo.id}
+                    className="rounded-2xl border border-zinc-100 px-3 py-3"
                   >
-                    {todo.text}
-                  </div>
+                    <div className="flex items-start gap-3">
+                      <button
+                        onClick={() => toggleTodo(todo.id)}
+                        className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border text-xs ${
+                          todo.done
+                            ? 'border-zinc-900 bg-zinc-900 text-white'
+                            : 'border-zinc-300 bg-white text-transparent'
+                        }`}
+                        aria-label="할 일 체크"
+                      >
+                        ✓
+                      </button>
 
-                  <button
-                    onClick={() => deleteTodo(todo.id)}
-                    className="text-sm text-zinc-400"
-                  >
-                    삭제
-                  </button>
-                </div>
-              ))
+                      <div className="min-w-0 flex-1">
+                        {editingTodoId === todo.id ? (
+                          <div className="space-y-2">
+                            <input
+                              value={editingTodoText}
+                              onChange={(e) => setEditingTodoText(e.target.value)}
+                              className="w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm outline-none"
+                            />
+
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setEditingTodoCategory('work')}
+                                className={`rounded-full px-3 py-1.5 text-xs ${
+                                  editingTodoCategory === 'work'
+                                    ? 'bg-zinc-900 text-white'
+                                    : 'bg-zinc-100 text-zinc-600'
+                                }`}
+                              >
+                                WORK
+                              </button>
+
+                              <button
+                                onClick={() => setEditingTodoCategory('personal')}
+                                className={`rounded-full px-3 py-1.5 text-xs ${
+                                  editingTodoCategory === 'personal'
+                                    ? 'bg-zinc-900 text-white'
+                                    : 'bg-zinc-100 text-zinc-600'
+                                }`}
+                              >
+                                PERSONAL
+                              </button>
+                            </div>
+
+                            <div className="flex gap-2">
+                              <button
+                                onClick={saveTodoEdit}
+                                className="rounded-2xl bg-zinc-900 px-3 py-2 text-xs font-medium text-white"
+                              >
+                                저장
+                              </button>
+                              <button
+                                onClick={cancelTodoEdit}
+                                className="rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600"
+                              >
+                                취소
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              className={`text-sm ${
+                                todo.done
+                                  ? 'text-zinc-400 line-through'
+                                  : 'text-zinc-800'
+                              }`}
+                            >
+                              {todo.text}
+                            </div>
+
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                onClick={() => startEditTodo(todo)}
+                                className="text-xs text-zinc-500"
+                              >
+                                수정
+                              </button>
+
+                              <button
+                                onClick={() => toggleTodoExpanded(todo.id)}
+                                className="text-xs text-zinc-500"
+                              >
+                                {todo.expanded ? '접기' : '열기'}
+                              </button>
+
+                              <button
+                                onClick={() => deleteTodo(todo.id)}
+                                className="text-xs text-zinc-400"
+                              >
+                                삭제
+                              </button>
+
+                              {totalCount > 0 && (
+                                <span className="rounded-full bg-zinc-100 px-2 py-1 text-[11px] text-zinc-600">
+                                  하위할일 {doneCount}/{totalCount}
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {todo.expanded && (
+                      <div className="mt-4 space-y-4 rounded-2xl bg-zinc-50 p-3">
+                        <div>
+                          <div className="mb-2 text-xs font-medium text-zinc-500">
+                            하위 할 일
+                          </div>
+
+                          <div className="mb-2 flex gap-2">
+                            <input
+                              value={subtaskInputs[todo.id] ?? ''}
+                              onChange={(e) =>
+                                setSubtaskInputs((prev) => ({
+                                  ...prev,
+                                  [todo.id]: e.target.value,
+                                }))
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') addSubtask(todo.id)
+                              }}
+                              placeholder="하위 할 일 추가"
+                              className="flex-1 rounded-2xl border border-zinc-200 bg-white px-4 py-2.5 text-sm outline-none"
+                            />
+                            <button
+                              onClick={() => addSubtask(todo.id)}
+                              className="rounded-2xl bg-zinc-900 px-3 py-2.5 text-xs font-medium text-white"
+                            >
+                              추가
+                            </button>
+                          </div>
+
+                          <div className="space-y-2">
+                            {todo.subtasks.length === 0 ? (
+                              <div className="rounded-2xl bg-white px-3 py-3 text-sm text-zinc-400">
+                                아직 하위 할 일이 없어
+                              </div>
+                            ) : (
+                              todo.subtasks.map((sub) => (
+                                <div
+                                  key={sub.id}
+                                  className="rounded-2xl bg-white px-3 py-3"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <button
+                                      onClick={() =>
+                                        toggleSubtask(todo.id, sub.id)
+                                      }
+                                      className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] ${
+                                        sub.done
+                                          ? 'border-zinc-900 bg-zinc-900 text-white'
+                                          : 'border-zinc-300 bg-white text-transparent'
+                                      }`}
+                                    >
+                                      ✓
+                                    </button>
+
+                                    <div className="flex-1 min-w-0">
+                                      {editingSubtaskId === sub.id ? (
+                                        <input
+                                          value={editingSubtaskText}
+                                          onChange={(e) =>
+                                            setEditingSubtaskText(e.target.value)
+                                          }
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              saveSubtaskEdit(todo.id, sub.id)
+                                            }
+                                          }}
+                                          className="w-full rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-sm outline-none"
+                                        />
+                                      ) : (
+                                        <div
+                                          className={`text-sm ${
+                                            sub.done
+                                              ? 'text-zinc-400 line-through'
+                                              : 'text-zinc-800'
+                                          }`}
+                                        >
+                                          {sub.text}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-2 flex flex-wrap gap-2 pl-8">
+                                    {editingSubtaskId === sub.id ? (
+                                      <>
+                                        <button
+                                          onClick={() =>
+                                            saveSubtaskEdit(todo.id, sub.id)
+                                          }
+                                          className="text-xs text-zinc-600"
+                                        >
+                                          저장
+                                        </button>
+                                        <button
+                                          onClick={cancelSubtaskEdit}
+                                          className="text-xs text-zinc-400"
+                                        >
+                                          취소
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button
+                                          onClick={() => startEditSubtask(sub)}
+                                          className="text-xs text-zinc-500"
+                                        >
+                                          수정
+                                        </button>
+                                        <button
+                                          onClick={() =>
+                                            deleteSubtask(todo.id, sub.id)
+                                          }
+                                          className="text-xs text-zinc-400"
+                                        >
+                                          삭제
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-2 text-xs font-medium text-zinc-500">
+                            메모
+                          </div>
+                          <textarea
+                            value={todo.memo}
+                            onChange={(e) =>
+                              updateTodoMemo(todo.id, e.target.value)
+                            }
+                            placeholder="업무 흐름 메모나 체크 포인트를 적어둬"
+                            className="min-h-[110px] w-full resize-none rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm outline-none placeholder:text-zinc-400"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
             )}
           </div>
         </section>
@@ -702,7 +1196,9 @@ export default function HomePage() {
         <section className="rounded-3xl border border-zinc-200 bg-white p-4 shadow-sm">
           <div className="mb-4">
             <h2 className="text-lg font-semibold">선택한 날짜 할 일</h2>
-            <p className="mt-1 text-sm text-zinc-500">{selectedDateKey}</p>
+            <p className="mt-1 text-sm text-zinc-500">
+              {selectedDateKey} / {activeTab === 'work' ? 'WORK' : 'PERSONAL'}
+            </p>
           </div>
 
           <div className="flex flex-col gap-2">
@@ -714,39 +1210,87 @@ export default function HomePage() {
               selectedDateTodos.map((todo) => (
                 <div
                   key={todo.id}
-                  className="flex items-center gap-3 rounded-2xl border border-zinc-100 px-3 py-3"
+                  className="rounded-2xl border border-zinc-100 px-3 py-3"
                 >
-                  <button
-                    onClick={() => toggleTodo(todo.id)}
-                    className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs ${
-                      todo.done
-                        ? 'border-zinc-900 bg-zinc-900 text-white'
-                        : 'border-zinc-300 bg-white text-transparent'
-                    }`}
-                  >
-                    ✓
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => toggleTodo(todo.id)}
+                      className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs ${
+                        todo.done
+                          ? 'border-zinc-900 bg-zinc-900 text-white'
+                          : 'border-zinc-300 bg-white text-transparent'
+                      }`}
+                    >
+                      ✓
+                    </button>
 
-                  <div
-                    className={`flex-1 text-sm ${
-                      todo.done ? 'text-zinc-400 line-through' : 'text-zinc-800'
-                    }`}
-                  >
-                    {todo.text}
+                    <div
+                      className={`flex-1 text-sm ${
+                        todo.done ? 'text-zinc-400 line-through' : 'text-zinc-800'
+                      }`}
+                    >
+                      {todo.text}
+                    </div>
+
+                    <button
+                      onClick={() => deleteTodo(todo.id)}
+                      className="text-sm text-zinc-400"
+                    >
+                      삭제
+                    </button>
                   </div>
-
-                  <button
-                    onClick={() => deleteTodo(todo.id)}
-                    className="text-sm text-zinc-400"
-                  >
-                    삭제
-                  </button>
                 </div>
               ))
             )}
           </div>
         </section>
       </div>
+
+      <button
+        onClick={() => setQuickNoteOpen(true)}
+        className="fixed bottom-28 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-zinc-900 text-2xl text-white shadow-lg"
+        aria-label="빠른 노트 열기"
+      >
+        ✏️
+      </button>
+
+      {quickNoteOpen && (
+        <div className="fixed inset-0 z-50 bg-black/30 px-4">
+          <div className="mx-auto mt-24 w-full max-w-md rounded-3xl bg-white p-4 shadow-xl">
+            <div className="mb-3">
+              <h2 className="text-lg font-semibold">빠른 노트</h2>
+              <p className="mt-1 text-sm text-zinc-500">
+                떠오른 생각을 짧게 남겨둬
+              </p>
+            </div>
+
+            <textarea
+              value={quickNoteText}
+              onChange={(e) => setQuickNoteText(e.target.value)}
+              placeholder="갑자기 떠오른 아이디어"
+              className="min-h-[160px] w-full resize-none rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm outline-none"
+            />
+
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={saveQuickNote}
+                className="flex-1 rounded-2xl bg-zinc-900 px-4 py-3 text-sm font-medium text-white"
+              >
+                저장
+              </button>
+              <button
+                onClick={() => {
+                  setQuickNoteOpen(false)
+                  setQuickNoteText('')
+                }}
+                className="flex-1 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-600"
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <DockNav current="check" />
     </main>

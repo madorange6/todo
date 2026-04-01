@@ -47,7 +47,11 @@ function formatDateKey(date: Date) {
   return `${y}-${m}-${d}`
 }
 
-function DockNav({ current }: { current: 'check' | 'note' }) {
+function DockNav({
+  current,
+}: {
+  current: 'check' | 'ideas' | 'note'
+}) {
   const base =
     'flex h-14 w-14 items-center justify-center rounded-2xl text-2xl transition'
   const active = 'bg-zinc-900 text-white shadow-md'
@@ -62,6 +66,14 @@ function DockNav({ current }: { current: 'check' | 'note' }) {
           aria-label="오늘 페이지"
         >
           ☑️
+        </Link>
+
+        <Link
+          href="/ideas"
+          className={`${base} ${current === 'ideas' ? active : inactive}`}
+          aria-label="아이디어 페이지"
+        >
+          💡
         </Link>
 
         <Link
