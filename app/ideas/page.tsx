@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
 type TodoCategory = 'work' | 'personal'
@@ -44,46 +43,6 @@ function formatDateKey(date: Date) {
   return `${y}-${m}-${d}`
 }
 
-function DockNav({
-  current,
-}: {
-  current: 'check' | 'ideas' | 'note'
-}) {
-  const base =
-    'flex h-14 w-14 items-center justify-center rounded-2xl text-2xl transition'
-  const active = 'bg-zinc-900 text-white shadow-md'
-  const inactive = 'border border-zinc-200 bg-white text-zinc-500'
-
-  return (
-    <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2">
-      <div className="flex items-center gap-3 rounded-3xl border border-zinc-200 bg-zinc-50/95 px-3 py-3 shadow-lg backdrop-blur">
-        <Link
-          href="/"
-          className={`${base} ${current === 'check' ? active : inactive}`}
-          aria-label="오늘 페이지"
-        >
-          ☑️
-        </Link>
-
-        <Link
-          href="/ideas"
-          className={`${base} ${current === 'ideas' ? active : inactive}`}
-          aria-label="아이디어 페이지"
-        >
-          💡
-        </Link>
-
-        <Link
-          href="/question"
-          className={`${base} ${current === 'note' ? active : inactive}`}
-          aria-label="질문 페이지"
-        >
-          📝
-        </Link>
-      </div>
-    </div>
-  )
-}
 
 export default function IdeasPage() {
   const [mounted, setMounted] = useState(false)
@@ -307,7 +266,6 @@ export default function IdeasPage() {
         </section>
       </div>
 
-      <DockNav current="ideas" />
     </main>
   )
 }
